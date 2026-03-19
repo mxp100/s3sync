@@ -23,6 +23,7 @@ type Location struct {
 type Options struct {
 	DeleteExtra          bool `yaml:"deleteExtra"`
 	OverwriteOnNameMatch bool `yaml:"overwriteOnNameMatch"`
+	CopyWorkers          int  `yaml:"copyWorkers,omitempty"`
 }
 
 type SyncJob struct {

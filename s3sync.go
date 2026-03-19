@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/minio/minio-go/v7"
 
@@ -93,23 +95,54 @@ func (s *Syncer) Run(ctx context.Context) error {
 		return nil
 	}
 
-	// Выполнение копирований
-	for _, dst := range copyList {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+	// Выполнение копирований параллельно через пул воркеров
+	workers := s.job.Options.CopyWorkers
+	if workers <= 0 {
+		workers = runtime.NumCPU()
+		if workers < 1 {
+			workers = 1
 		}
-		rel := strings.TrimPrefix(dst.Key, s.job.Destination.Prefix)
-		srcKey := joinKeys(s.job.Source.Prefix, rel)
-
-		s.ui.SetStatus(s.idx, fmt.Sprintf("copy: %s", shortKey(dst.Key)))
-		if err := copyObject(ctx, srcCli, dstCli, s.job.Source.Bucket, srcKey, s.job.Destination.Bucket, dst.Key); err != nil {
-			s.ui.SetError(s.idx, err)
-			log.Printf("[%s] copy error %s -> %s: %v", s.job.Name, srcKey, dst.Key, err)
-		}
-		s.ui.IncDone(s.idx)
 	}
+	jobsCh := make(chan objectInfo)
+	var wgCopies sync.WaitGroup
+
+	for i := 0; i < workers; i++ {
+		wgCopies.Add(1)
+		go func() {
+			defer wgCopies.Done()
+			for dst := range jobsCh {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				rel := strings.TrimPrefix(dst.Key, s.job.Destination.Prefix)
+				srcKey := joinKeys(s.job.Source.Prefix, rel)
+
+				s.ui.SetStatus(s.idx, fmt.Sprintf("copy: %s", shortKey(dst.Key)))
+				if err := copyObject(ctx, srcCli, dstCli, s.job.Source.Bucket, srcKey, s.job.Destination.Bucket, dst.Key); err != nil {
+					s.ui.SetError(s.idx, err)
+					log.Printf("[%s] copy error %s -> %s: %v", s.job.Name, srcKey, dst.Key, err)
+				}
+				s.ui.IncDone(s.idx)
+			}
+		}()
+	}
+
+	// Отправляем задачи копирования воркерам
+	go func() {
+		defer close(jobsCh)
+		for _, dst := range copyList {
+			select {
+			case <-ctx.Done():
+				return
+			case jobsCh <- dst:
+			}
+		}
+	}()
+
+	// Ждем завершения копирований
+	wgCopies.Wait()
 
 	// Выполнение удалений
 	if len(deleteList) > 0 {
