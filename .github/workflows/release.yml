@@ -1,0 +1,83 @@
+name: Release builds
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP=s3sync
+          mkdir -p dist
+          EXT=""
+          if [ "${GOOS}" = "windows" ]; then EXT=".exe"; fi
+          OUT="dist/${APP}_${GOOS}_${GOARCH}${EXT}"
+          go mod download
+          go build -trimpath -ldflags "-s -w" -o "${OUT}" ./
+
+      - name: Package artifacts
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          APP=s3sync
+          cd dist
+          BASE="${APP}_${GOOS}_${GOARCH}"
+          if [ "${GOOS}" = "windows" ]; then
+            zip -9 "${BASE}.zip" "${BASE}.exe"
+            sha256sum "${BASE}.zip" > "${BASE}.zip.sha256"
+          else
+            tar -czf "${BASE}.tar.gz" "${BASE}"
+            sha256sum "${BASE}.tar.gz" > "${BASE}.tar.gz.sha256"
+          fi
+
+      - name: Upload assets to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
