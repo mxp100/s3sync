@@ -20,3 +20,4 @@
   options:
     deleteExtra: false
     overwriteOnNameMatch: false
+    copyWorkers: 8
