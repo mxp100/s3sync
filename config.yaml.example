@@ -1,0 +1,22 @@
+- name: example-sync
+  source:
+    bucket: source-bucket
+    prefix: ""
+    region: us-east-1
+    host: https://s3.example.com
+    pathStyle: true
+    credentials:
+      accessKeyId: AAA....
+      secretAccessKey: Xks....
+  destination:
+    bucket: dst-bucket
+    prefix: ""
+    region: us-east-1
+    host: https://s3.example.com
+    pathStyle: true
+    credentials:
+      accessKeyId: AAB.....
+      secretAccessKey: Kgy0....
+  options:
+    deleteExtra: false
+    overwriteOnNameMatch: false
