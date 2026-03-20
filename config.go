@@ -12,12 +12,13 @@ type Credentials struct {
 }
 
 type Location struct {
-	Bucket      string       `yaml:"bucket"`
-	Prefix      string       `yaml:"prefix"`
-	Region      string       `yaml:"region"`
-	Host        string       `yaml:"host"`
-	PathStyle   bool         `yaml:"pathStyle"`
-	Credentials *Credentials `yaml:"credentials,omitempty"`
+	Bucket          string       `yaml:"bucket"`
+	Prefix          string       `yaml:"prefix"`
+	Region          string       `yaml:"region"`
+	Host            string       `yaml:"host"`
+	PathStyle       bool         `yaml:"pathStyle"`
+	AllowSelfSigned bool         `yaml:"allowSelfSigned,omitempty"`
+	Credentials     *Credentials `yaml:"credentials,omitempty"`
 }
 
 type Options struct {

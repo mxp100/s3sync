@@ -2,13 +2,17 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
+	"net/http"
+	"net/url"
 	"runtime"
 	"strings"
 	"sync"
 
 	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 
 	"s3sync/internal/objsync"
 )
@@ -166,18 +170,50 @@ func (s *Syncer) Run(ctx context.Context) error {
 }
 
 func newMinioClient(loc Location) (*minio.Client, error) {
-	ep := objsync.Endpoint{
-		Bucket:    loc.Bucket,
-		Prefix:    loc.Prefix,
-		Region:    loc.Region,
-		Host:      loc.Host,
-		PathStyle: loc.PathStyle,
+	// Derive endpoint and scheme from Host. If scheme is omitted, default to https.
+	endpoint := loc.Host
+	secure := true
+	if strings.Contains(loc.Host, "://") {
+		u, err := url.Parse(loc.Host)
+		if err != nil {
+			return nil, fmt.Errorf("parse host %q: %w", loc.Host, err)
+		}
+		endpoint = u.Host
+		switch strings.ToLower(u.Scheme) {
+		case "http":
+			secure = false
+		case "https":
+			secure = true
+		}
 	}
-	if loc.Credentials != nil {
-		ep.Credentials.AccessKeyId = loc.Credentials.AccessKeyID
-		ep.Credentials.SecretAccessKey = loc.Credentials.SecretAccessKey
+
+	// Prepare transport and optionally allow self-signed certs.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if transport == nil {
+		transport = &http.Transport{}
 	}
-	return objsync.NewMinioClient(ep)
+	if loc.AllowSelfSigned {
+		if transport.TLSClientConfig == nil {
+			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		} else {
+			transport.TLSClientConfig.InsecureSkipVerify = true
+		}
+	}
+
+	opts := &minio.Options{
+		Secure:       secure,
+		Transport:    transport,
+		Region:       loc.Region,
+		BucketLookup: minio.BucketLookupDNS,
+	}
+	if loc.PathStyle {
+		opts.BucketLookup = minio.BucketLookupPath
+	}
+	if loc.Credentials != nil && loc.Credentials.AccessKeyID != "" {
+		opts.Creds = credentials.NewStaticV4(loc.Credentials.AccessKeyID, loc.Credentials.SecretAccessKey, "")
+	}
+
+	return minio.New(endpoint, opts)
 }
 
 func listAllObjects(ctx context.Context, cli *minio.Client, bucket, prefix string) (map[string]objectInfo, error) {

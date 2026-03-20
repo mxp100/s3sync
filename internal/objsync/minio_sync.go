@@ -104,8 +104,21 @@ func CopyObject(ctx context.Context, src *minio.Client, dst *minio.Client, srcBu
 	}
 	defer reader.Close()
 
+	// Get object metadata
+	objInfo, err := reader.Stat()
+	if err != nil {
+		return fmt.Errorf("stat object %s: %w", srcKey, err)
+	}
+
+	// Prepare options with preserved metadata
+	opts := minio.PutObjectOptions{
+		ContentType:  objInfo.ContentType,
+		UserMetadata: objInfo.UserMetadata,
+		StorageClass: objInfo.StorageClass,
+	}
+
 	// Stream upload with unknown size (-1); content-type оставляем по умолчанию.
-	if _, err := dst.PutObject(ctx, dstBucket, dstKey, reader, -1, minio.PutObjectOptions{}); err != nil {
+	if _, err := dst.PutObject(ctx, dstBucket, dstKey, reader, -1, opts); err != nil {
 		return fmt.Errorf("put dst %s: %w", dstKey, err)
 	}
 	return nil
@@ -114,97 +127,4 @@ func CopyObject(ctx context.Context, src *minio.Client, dst *minio.Client, srcBu
 // RemoveObject deletes a single object.
 func RemoveObject(ctx context.Context, c *minio.Client, bucket, key string) error {
 	return c.RemoveObject(ctx, bucket, key, minio.RemoveObjectOptions{})
-}
-
-// EnsureBucket ensures bucket exists; creates it if missing (idempotent).
-func EnsureBucket(ctx context.Context, c *minio.Client, bucket, region string) error {
-	exists, err := c.BucketExists(ctx, bucket)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-	return c.MakeBucket(ctx, bucket, minio.MakeBucketOptions{Region: region})
-}
-
-// Sync performs a one-shot sync from src to dst using MinIO clients and options provided.
-func Sync(ctx context.Context, srcEp, dstEp Endpoint, opt Options) error {
-	srcClient, err := NewMinioClient(srcEp)
-	if err != nil {
-		return fmt.Errorf("init src client: %w", err)
-	}
-	dstClient, err := NewMinioClient(dstEp)
-	if err != nil {
-		return fmt.Errorf("init dst client: %w", err)
-	}
-
-	// Ensure destination bucket exists.
-	if err := EnsureBucket(ctx, dstClient, dstEp.Bucket, dstEp.Region); err != nil {
-		return fmt.Errorf("ensure dst bucket: %w", err)
-	}
-
-	srcObjs, err := ListAllObjects(ctx, srcClient, srcEp.Bucket, srcEp.Prefix)
-	if err != nil {
-		return fmt.Errorf("list src: %w", err)
-	}
-	dstObjs, err := ListAllObjects(ctx, dstClient, dstEp.Bucket, dstEp.Prefix)
-	if err != nil {
-		return fmt.Errorf("list dst: %w", err)
-	}
-
-	type info = ObjectInfo
-	rel := func(prefix, key string) string {
-		if prefix == "" {
-			return key
-		}
-		return strings.TrimPrefix(key, prefix)
-	}
-	join := func(prefix, key string) string {
-		if prefix == "" {
-			return key
-		}
-		if key == "" {
-			return prefix
-		}
-		if strings.HasSuffix(prefix, "/") || strings.HasPrefix(key, "/") {
-			return prefix + key
-		}
-		return prefix + "/" + key
-	}
-
-	srcMap := make(map[string]info, len(srcObjs))
-	for _, o := range srcObjs {
-		srcMap[rel(srcEp.Prefix, o.Key)] = o
-	}
-	dstMap := make(map[string]info, len(dstObjs))
-	for _, o := range dstObjs {
-		dstMap[rel(dstEp.Prefix, o.Key)] = o
-	}
-
-	// Upload objects that are missing by name in destination.
-	for rkey, so := range srcMap {
-		_, exists := dstMap[rkey]
-		needCopy := !exists
-		if needCopy {
-			srcKey := so.Key
-			dstKey := join(dstEp.Prefix, rkey)
-			if err := CopyObject(ctx, srcClient, dstClient, srcEp.Bucket, dstEp.Bucket, srcKey, dstKey); err != nil {
-				return fmt.Errorf("copy %s -> %s: %w", srcKey, dstKey, err)
-			}
-		}
-	}
-
-	// Optionally delete extras in destination.
-	if opt.DeleteExtra {
-		for rkey, do := range dstMap {
-			if _, ok := srcMap[rkey]; !ok {
-				if err := RemoveObject(ctx, dstClient, dstEp.Bucket, do.Key); err != nil {
-					return fmt.Errorf("delete extra %s: %w", do.Key, err)
-				}
-			}
-		}
-	}
-
-	return nil
 }
